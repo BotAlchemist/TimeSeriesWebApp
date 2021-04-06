@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 """
-Created on Thu Mar 25 12:38:26 2021
+Created on Wed Mar 24 08:14:40 2021
 
-@author: sumit.srivastava
+@author: Sumit
 """
 
 import streamlit as st
@@ -14,9 +14,12 @@ from statsmodels.tsa.vector_ar.var_model import VAR
 from statsmodels.tsa.arima_model import ARIMA
 from sklearn.neighbors import KNeighborsRegressor
 from sklearn.ensemble import RandomForestRegressor
-from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
+from sklearn.metrics import mean_squared_error
 import os
 import itertools
+from azure.storage.blob import BlobServiceClient, BlobClient, ContentSettings,ContainerClient
+import pickle
+
 
 
 st.title('Time Series Forecasting Web App')
@@ -34,6 +37,7 @@ df= pd.read_csv(filename_select)
 date_column= st.sidebar.selectbox('Select date column', df.columns.tolist())
 target_column= st.sidebar.selectbox('Select target column', df.columns.tolist())
 
+
 additional_columns_options=[]
 for i_col in df.columns:
     additional_columns_options.append(i_col)
@@ -44,39 +48,80 @@ if len(additional_columns) !=0:
     for i_col in additional_columns:
         final_column.append(i_col)
 
-df= df[final_column]        
-st.write(df.head(5))
+df= df[final_column] 
+st.markdown("### Dataset")       
+st.write(df)
 
-date_extractor_options= ['Day','Week', 'Month', 'Quarter']
-date_extractor= st.sidebar.multiselect('Select components to be extracted', date_extractor_options)
 
 ts_algorithm_name_list= ['Null', 'VAR', 'K Nearest Neighbor', 'Random Forest', 'ARIMA']
 ts_algorithm_name= st.sidebar.selectbox('Select algorithm', ts_algorithm_name_list)
 
 
 
+def save_model_to_blob(model):
+    print("ABC")
+    local_path = "." 
+    filename = 'finalized_model.sav'
+    pickle.dump(model, open(filename, 'wb'))
+    upload_file_path = os.path.join(local_path, filename)
+    my_connection_string="DefaultEndpointsProtocol=https;AccountName=sumitfilestorage;AccountKey=4AIaVvS+u6WC7mpgSnyPwr2LjWZwF9GwSQEXZD/+/b7m+BZsPdbx7k1csueZv514YiDzm6zWf3tTqgOdEzc6nA==;EndpointSuffix=core.windows.net"
+    model_container= "model-container"
+    blob_service_client= BlobServiceClient.from_connection_string(my_connection_string)
+    blob_client= blob_service_client.get_blob_client(container= model_container, blob= filename)
+    
+    
+    with open(upload_file_path, "rb") as data:
+        blob_client.upload_blob(data, overwrite=True)
+        st.info("Model saved to Azure Blob Storage" )
+  
+    
+
 
 def display_results(train_df, test_df, target_column):
-    
+    st.markdown("### Plot Actual vs Predicted")
+    st.line_chart(test_df[['Prediction', target_column]])
+            
+    st.markdown("### Dataset Actual vs Predicted")
+    st.write(test_df[[target_column, 'Prediction']])
+            
     MSE= mean_squared_error(test_df[target_column], test_df['Prediction'])
     RMSE= MSE**0.5
     st.markdown("#### Root Means Squred Error: "+ str(round(RMSE,2)))
-    MAE= mean_absolute_error(test_df[target_column], test_df['Prediction'])
-    st.markdown("#### Mean Absolute Error: "+ str(round(MAE,2)))
-                
-    R2= r2_score(test_df[target_column], test_df['Prediction'])
-    st.markdown("#### R Squared Error: "+ str(round(R2,2)))
-    
-    st.markdown("### Plot Actual vs Predicted")
-    st.line_chart(test_df[['Prediction', target_column]])
-                       
-    st.markdown("### Dataset Actual vs Predicted")
-    st.write(test_df[[target_column, 'Prediction']])
             
     st.markdown("### Overall graph")
     train_df= train_df.append(test_df)
     st.line_chart(train_df[['Prediction', target_column]])
+
+def run_auto_arima_new(data):
+    # define the p, d and q parameters to take any value 
+    p= p= list(range(0,4))
+    q= [0,1]
+    d = p= list(range(0,4))
+ 
+    # generate all different combinations of p, d and q triplets
+    pdq = list(itertools.product(p, d, q))
     
+    best_aic = np.inf
+    best_pdq = None
+    tmp_model = None
+    best_mdl = None
+ 
+    for param in pdq:
+        #print(param)
+        try:
+            #print("Success")
+            tmp_mdl = ARIMA(history,order = param)
+            res = tmp_mdl.fit(disp=0)
+            #print(res.aic)
+            if res.aic < best_aic:
+                #print(res.aic, param)
+                best_aic = res.aic
+                best_pdq = param
+                best_mdl = tmp_mdl
+        except:
+            #print("Unexpected error:", sys.exc_info()[0])
+            continue
+    return best_pdq    
 
 def run_auto_var(data, n):
     best_aic = np.inf
@@ -111,60 +156,16 @@ def get_best_k(train, test, target_column):
             best_k= k
     return best_k
 
-def run_auto_arima_new(data):
-    # define the p, d and q parameters to take any value 
-    p= p= list(range(0,6))
-    q= [0,1]
-    d = p= list(range(0,6))
- 
-    # generate all different combinations of p, d and q triplets
-    pdq = list(itertools.product(p, d, q))
-    
-    best_aic = np.inf
-    best_pdq = None
-    tmp_model = None
-    best_mdl = None
- 
-    for param in pdq:
-        #print(param)
-        try:
-            #print("Success")
-            tmp_mdl = ARIMA(history,order = param)
-            res = tmp_mdl.fit(disp=0)
-            #print(res.aic)
-            if res.aic < best_aic:
-                #print(res.aic, param)
-                best_aic = res.aic
-                best_pdq = param
-                best_mdl = tmp_mdl
-        except:
-            #print("Unexpected error:", sys.exc_info()[0])
-            continue
-    #print("Best ARIMA model - AIC:{}".format(best_pdq, best_aic))
-    #print("PDQ value: ", best_pdq)
-    #print("Seasonal PDQ value: ", best_seasonal_pdq)
-    #print("AIC values: ", best_aic)
-    #print("\n")
-    return best_pdq
-
-
 if len(filename_select) !=0  and date_column != target_column and ts_algorithm_name != 'Null':
     run_algorithm= st.sidebar.checkbox("Run Algorithm")
     if run_algorithm:
         
         df[date_column]= pd.to_datetime(df[date_column])
-        if 'Day' in date_extractor:
-            df['Day_name'] = df[date_column].dt.day
-        if 'Week' in date_extractor:
-            df['Week_name'] = df[date_column].dt.week
-        if 'Month' in date_extractor:
-            df['Month_name'] = df[date_column].dt.month
-        if 'Quarter' in date_extractor:
-            df['Quarter_name'] = df[date_column].dt.quarter
-            
+        df['Week_name'] = df[date_column].dt.week
+        df['Month_name'] = df[date_column].dt.month
+        df['Quarter_name'] = df[date_column].dt.quarter
         df = df.set_index(date_column)
         
-        #st.markdown("### Dataset")
         #st.write(df)
         
         st.markdown("### Plot")
@@ -176,7 +177,7 @@ if len(filename_select) !=0  and date_column != target_column and ts_algorithm_n
         #st.write(fig)
         
         if ts_algorithm_name == 'VAR':
-            split= st.sidebar.slider("Train/Test split %", 10, 95)
+            split= st.sidebar.slider("Train/Test split %", 10, 90)
             
             split_value= int((split/100)*len(df))
             train_df= df.iloc[:split_value]
@@ -189,29 +190,27 @@ if len(filename_select) !=0  and date_column != target_column and ts_algorithm_n
             model= VAR(train_df)
             model_fit= model.fit(best_p)
             
-            
-        
             st.markdown("#### Best P value: "+ str(best_p))
             
             prediction= model_fit.forecast(model_fit.y, steps=len(test_df))
-            
-            
-            var_col= ['Prediction']
-            var_temp_col= ['Var1', 'Var2', 'Var3', 'Var4', 'Var5','Var6', 'Var7', 'Var8', 'Var9', 'Var10',  'Var11']
-            
-            for i in range(len(date_extractor) + len(additional_columns)):
-                var_col.append(var_temp_col[i])
-            var_prediction= pd.DataFrame(prediction, columns=var_col)
+            var_prediction= pd.DataFrame(prediction, columns=['Prediction', 'Var1', 'Var2', 'Var3'])
             var_prediction= var_prediction['Prediction'].values
             
             test_df['Prediction']= var_prediction
             display_results(train_df, test_df, target_column)
             
+            
+            #print(model_fit)
+            save_model= st.sidebar.radio("Save model?",('No', 'Yes') )
+            if save_model== 'Yes' and model_fit is not None:
+                save_model_to_blob(model_fit)
+                
+            
         
         
         
         elif ts_algorithm_name == 'K Nearest Neighbor':
-            split= st.sidebar.slider("Train/Test split %", 10, 95)
+            split= st.sidebar.slider("Train/Test split %", 10, 90)
             
             split_value= int((split/100)*len(df))
             train_df= df.iloc[:split_value]
@@ -231,8 +230,13 @@ if len(filename_select) !=0  and date_column != target_column and ts_algorithm_n
             
             display_results(train_df, test_df, target_column)
             
+            #print(model_fit)
+            save_model= st.sidebar.radio("Save model?",('No', 'Yes') )
+            if save_model== 'Yes' and knn is not None:
+                save_model_to_blob(knn)
+            
         elif ts_algorithm_name == 'Random Forest':
-            split= st.sidebar.slider("Train/Test split %", 10, 95)
+            split= st.sidebar.slider("Train/Test split %", 10, 90)
             run_default= st.sidebar.radio("Use default settings?",('Yes', 'No') )
             
             split_value= int((split/100)*len(df))
@@ -262,9 +266,12 @@ if len(filename_select) !=0  and date_column != target_column and ts_algorithm_n
             test_df['Prediction']= rf_prediction
             display_results(train_df, test_df, target_column)
             
-            
-            
+            save_model= st.sidebar.radio("Save model?",('No', 'Yes') )
+            if save_model== 'Yes' and rf_model is not None:
+                save_model_to_blob(rf_model)
+        
         elif ts_algorithm_name == 'ARIMA':
+            arima_model_fit = None
             split= st.sidebar.slider("Train/Test split %", 10, 95)
             split_value= int((split/100)*len(df))
             
@@ -285,6 +292,22 @@ if len(filename_select) !=0  and date_column != target_column and ts_algorithm_n
             test_df['Prediction']= arima_prediction
             display_results(train_df, test_df, target_column)
             
+            
+            save_model= st.sidebar.radio("Save model?",('No', 'Yes') )
+            if save_model== 'Yes' and arima_model_fit is not None:
+                save_model_to_blob(arima_model_fit)
+            
+            
+            
+        
         else:
             st.info("Work In Progress")
             
+
+
+
+
+
+
+
+
